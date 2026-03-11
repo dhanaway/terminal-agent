@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Ultra-concise terminal assistant powered by Gemini 3 Flash."""
+
+import sys
+import os
+
+try:
+    from google import genai
+except ImportError:
+    print("Run: pip3 install google-genai")
+    sys.exit(1)
+
+SYSTEM = """You are a terminal command assistant. Rules:
+- Default: give ONLY the command. No explanation, no markdown fences, no preamble.
+- If no single command answers it, use a short bulleted list (2-5 items max).
+- Never say "sure", "here you go", or any filler.
+- Only explain if the user explicitly says "explain" or "why".
+- Prefer one-liners. Be terse."""
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: ask <question>")
+        sys.exit(1)
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("Set GEMINI_API_KEY in your environment.")
+        sys.exit(1)
+
+    query = " ".join(sys.argv[1:])
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model="gemini-3.1-flash-lite-preview",
+        config={
+            "system_instruction": SYSTEM,
+            "temperature": 0.1,
+        },
+        contents=query,
+    )
+    print(response.text.strip())
+
+if __name__ == "__main__":
+    main()
