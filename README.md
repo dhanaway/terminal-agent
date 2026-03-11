@@ -58,8 +58,29 @@ source ~/.zshrc
 
 ## Usage
 
+**`ask`** — stateless, fast one-off questions:
+
 ```
 ask <question>
 ```
 
-That's it.
+**`askc`** — context-aware, knows your terminal:
+
+```
+askc <question>
+```
+
+`askc` reads your recent shell history and remembers the conversation, so you can do things like:
+
+```bash
+$ askc why did that last command fail
+# it sees your shell history and knows what "that" was
+
+$ askc how do i fix it
+# it remembers the prior answer and continues
+
+$ askc --clear
+# reset conversation when you're done
+```
+
+Context is per-terminal session — each tab/window gets its own history.

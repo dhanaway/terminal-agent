@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""Context-aware terminal assistant. Keeps conversation history + reads shell history."""
+
+import sys
+import os
+import json
+import urllib.request
+import subprocess
+import tempfile
+import hashlib
+
+SYSTEM = """You are a terminal command assistant with context of the user's terminal session.
+You can see their recent shell history and prior conversation.
+Rules:
+- Default: give ONLY the command. No explanation, no markdown fences, no preamble.
+- If no single command answers it, use a short bulleted list (2-5 items max).
+- Never say "sure", "here you go", or any filler.
+- Only explain if the user explicitly says "explain" or "why".
+- Prefer one-liners. Be terse.
+- Use the shell history context to give relevant answers (e.g. "fix that" = fix the last failed command)."""
+
+MODEL = "gemini-3.1-flash-lite-preview"
+
+def get_session_file():
+    """Unique history file per terminal session, stored in tmp."""
+    # Use parent PID (the shell) so all askc calls in one terminal share history
+    ppid = os.getppid()
+    h = hashlib.md5(str(ppid).encode()).hexdigest()[:8]
+    return os.path.join(tempfile.gettempdir(), f"askc_{h}.json")
+
+def load_history(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+def save_history(path, history):
+    # Keep last 20 turns to avoid bloating context
+    with open(path, "w") as f:
+        json.dump(history[-40:], f)
+
+def get_shell_history(n=30):
+    """Grab last N commands from shell history."""
+    # Try zsh first, then bash
+    hist_file = os.environ.get("HISTFILE")
+    if not hist_file:
+        for candidate in ["~/.zsh_history", "~/.bash_history"]:
+            expanded = os.path.expanduser(candidate)
+            if os.path.exists(expanded):
+                hist_file = expanded
+                break
+    if not hist_file or not os.path.exists(hist_file):
+        return ""
+    try:
+        with open(hist_file, "rb") as f:
+            raw = f.read()
+        # zsh history has metadata prefixed with ': timestamp:0;'
+        lines = []
+        for line in raw.decode("utf-8", errors="replace").splitlines():
+            if line.startswith(": "):
+                cmd = line.split(";", 1)[-1] if ";" in line else line
+                lines.append(cmd)
+            elif line.strip():
+                lines.append(line.strip())
+        return "\n".join(lines[-n:])
+    except Exception:
+        return ""
+
+def stream(url, body):
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    full = []
+    first = True
+    try:
+        with urllib.request.urlopen(req) as resp:
+            for line in resp:
+                line = line.decode().strip()
+                if not line.startswith("data: "):
+                    continue
+                chunk = json.loads(line[6:])
+                parts = chunk.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                for part in parts:
+                    text = part.get("text", "")
+                    if text:
+                        if first:
+                            text = text.lstrip()
+                            first = False
+                        sys.stdout.write(text)
+                        sys.stdout.flush()
+                        full.append(text)
+            if not first:
+                print()
+    except urllib.error.HTTPError as e:
+        err = e.read().decode()
+        try:
+            msg = json.loads(err)["error"]["message"]
+        except Exception:
+            msg = err
+        print(f"Error: {msg}", file=sys.stderr)
+        sys.exit(1)
+    return "".join(full).strip()
+
+def main():
+    if len(sys.argv) < 2:
+        if len(sys.argv) == 1:
+            print("Usage: askc <question>  (context-aware, keeps history)")
+            print("       askc --clear     (clear conversation history)")
+            sys.exit(1)
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("Set GEMINI_API_KEY in your environment.")
+        sys.exit(1)
+
+    session_file = get_session_file()
+
+    if sys.argv[1] == "--clear":
+        try:
+            os.remove(session_file)
+        except FileNotFoundError:
+            pass
+        print("Conversation cleared.")
+        return
+
+    query = " ".join(sys.argv[1:])
+    history = load_history(session_file)
+
+    # Build context: shell history on first message
+    shell_hist = get_shell_history()
+    system_with_context = SYSTEM
+    if shell_hist:
+        system_with_context += f"\n\nRecent shell history:\n{shell_hist}"
+
+    # Build conversation contents
+    contents = list(history)
+    contents.append({"role": "user", "parts": [{"text": query}]})
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:streamGenerateContent?alt=sse&key={api_key}"
+    body = json.dumps({
+        "system_instruction": {"parts": [{"text": system_with_context}]},
+        "contents": contents,
+        "generationConfig": {"temperature": 0.1},
+    }).encode()
+
+    response_text = stream(url, body)
+
+    # Save to history
+    history.append({"role": "user", "parts": [{"text": query}]})
+    history.append({"role": "model", "parts": [{"text": response_text}]})
+    save_history(session_file, history)
+
+if __name__ == "__main__":
+    main()
