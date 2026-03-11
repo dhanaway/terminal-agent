@@ -35,7 +35,7 @@ everyone should be able to run but only the owner can edit.
 ## Install
 
 ```bash
-git clone https://github.com/dhanaway/terminal-agent.git
+git clone https://github.com/dhanaway/terminal-ask.git
 ```
 
 No dependencies to install — just Python 3 (already on your machine).
@@ -43,7 +43,7 @@ No dependencies to install — just Python 3 (already on your machine).
 Add to your PATH:
 
 ```bash
-echo 'export PATH="$HOME/terminal-agent:$PATH"' >> ~/.zshrc
+echo 'export PATH="$HOME/terminal-ask:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
